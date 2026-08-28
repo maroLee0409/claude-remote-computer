@@ -1,0 +1,94 @@
+# claude-remote-computer 개발 지침
+
+Claude Code 가 Windows 데스크톱을 직접 조작하게 해주는 스킬. 여기가 개발 원본이다.
+
+## 이 저장소의 규칙
+
+**① 원본은 여기다. `~/.claude/skills/` 는 사본이다.**
+
+수정은 **반드시 이 저장소의 `skills/` 안에서** 한다.
+`~/.claude/skills/computer-use/` 를 직접 고치면 다음 동기화 때 덮여서 사라진다.
+
+**② 고쳤으면 이 PC 의 다른 Claude 들에게도 반영한다.**
+
+```powershell
+.\scripts\install.ps1
+```
+
+`skills/` 를 `~/.claude/skills/` 로 복사한다. 해시로 비교해서 바뀐 것만 옮긴다.
+**이 저장소에서 작업을 마치면 `.claude/settings.json` 의 Stop 훅이 자동으로 실행한다.**
+훅이 안 도는 상황(다른 도구로 편집 등)이면 손으로 한 번 돌려라.
+
+반영은 **새 Claude Code 세션부터** 걸린다. 이미 떠 있는 세션은 재시작해야 한다.
+
+**③ 기능이나 노하우가 늘면 문서에도 반영한다.**
+
+이 스킬의 가치는 코드보다 **실패에서 배운 것**에 있다.
+새 함정을 만나면 `references/pitfalls.md` 에 증상·원인·해법을 남긴다.
+"이렇게 하면 된다"보다 **"이렇게 했다가 이렇게 깨졌다"** 가 훨씬 쓸모 있다.
+
+**④ 커밋하고 푸시한다.** 공개 저장소이므로 아래를 지킨다.
+
+## 공개 저장소 — 절대 넣지 말 것
+
+- 실제 서버 IP·호스트명·도메인 → 예제는 `203.0.113.10` (RFC 5737 문서용 IP) 사용
+- 계정명·비밀번호·토큰·자격증명 경로
+- 회사명, 내부 시스템 이름, 프로젝트 코드명
+- 사내 경로 (`D:\사내시스템\...` 등)
+
+커밋 전 점검 — 패턴 자체에 실명을 적지 마라(그것도 유출이다). 형태로 잡는다:
+
+```bash
+# 공인 IP (문서용 203.0.113.x 는 제외)
+grep -rnoE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" . --exclude-dir=.git | grep -v "203\.0\.113"
+# 도메인·자격증명·사내 경로 냄새
+grep -rniE "\.co\.kr|\.com/|TERMSRV|password|token|[A-Z]:\\\\[가-힣]" . --exclude-dir=.git
+```
+
+걸린 게 있으면 문서용 값(`203.0.113.10`, `example.com`, `MYAPP`)으로 바꾼다.
+
+## 구조
+
+```
+.claude-plugin/
+  plugin.json          플러그인 매니페스트
+  marketplace.json     이 저장소 자체가 마켓플레이스 (자기 자신을 등록)
+skills/
+  computer-use/
+    SKILL.md           트리거 문구 · 핵심 순환 · 안전 규칙
+    scripts/rc.py      툴킷 (Pillow 만 의존)
+    references/
+      rdp.md           RDP 원격 서버 플레이북
+      pitfalls.md      실전 함정 모음
+scripts/
+  install.ps1          skills/ -> ~/.claude/skills/ 동기화
+.claude/settings.json  Stop 훅 (자동 동기화)
+```
+
+## 설계 원칙 — 바꾸기 전에 읽어라
+
+**의존성을 늘리지 마라.** Pillow 하나만 쓴다. pyautogui·pywin32 는 넣지 않는다.
+설치 장벽이 낮은 게 이 도구의 장점이다. ctypes 로 해결되면 ctypes 로 한다.
+
+**좌표는 스크린샷 픽셀 기준 하나로 통일한다.** 세 가지 좌표계가 공존하는 환경에서
+이걸 흐트러뜨리면 아무도 못 쓴다. 변환은 `scale()` 한 군데서만.
+
+**안전장치를 약화시키지 마라.** `--focus` 는 실패 시 **입력하지 않고 종료**해야 한다.
+"일단 시도해보고 안 되면 넘어가기"로 바꾸면 키가 엉뚱한 앱으로 샌다. 실제로 겪은 사고다.
+
+**한글 출력은 `_p()` 로.** cp949 콘솔에서 이모지 하나에 스크립트가 통째로 죽는다.
+
+## 테스트
+
+자동화된 테스트는 없다(GUI 라 어렵다). 대신 손으로 확인한다:
+
+```bash
+RC="skills/computer-use/scripts/rc.py"
+python "$RC" monitors                                   # 혼합 DPI 면 경고가 떠야 정상
+python "$RC" windows | head                             # 이모지 창 제목에서 안 죽어야 함
+python "$RC" windowrect "Chrome"
+python "$RC" clip "test" && python "$RC" getclip        # 왕복
+python "$RC" key enter --focus "없는창12345"             # 예외로 막혀야 정상
+```
+
+마지막 항목이 제일 중요하다. 여기서 입력이 나가면 안전장치가 깨진 것이다.

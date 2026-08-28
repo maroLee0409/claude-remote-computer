@@ -1,0 +1,8 @@
+# 캡처·임시 산출물
+*.png
+*.jpg
+*.gif
+!docs/*.png
+__pycache__/
+*.pyc
+.venv/
