@@ -1,17 +1,21 @@
 # claude-remote-computer
 
-Let Claude Code drive your Windows desktop — and reach servers that only expose RDP.
+Let Claude Code see your screen and use your computer.
 
-Browser automation stops at the tab. This doesn't. Claude takes a screenshot, **looks at it**,
-then moves the mouse and types — so it can work PowerShell, File Explorer, installers,
-IIS Manager, and any legacy GUI app. Including ones running inside an RDP session on a
-remote server where WinRM and SSH are closed.
+Some things have no API. A shop-floor MES built in JDeveloper. A WinForms tool from 2009.
+An installer wizard. Device Manager. Claude takes a screenshot, **looks at it**, then moves
+the mouse and types — the same way you would.
+
+And when something on your PC is broken and you don't know why, it can go look: read the
+error dialog, open Event Viewer, check Task Manager, and tell you what it found.
+
+Remote servers over RDP work the same way. That's one more target, not a separate mode.
 
 ```
-capture  →  look at the image  →  click / type  →  capture again to verify
+capture  ->  look at the image  ->  click / type  ->  capture again to verify
 ```
 
-No browser extension. No admin rights. **Pillow is the only dependency** — everything else is
+No browser extension. No admin rights. **Pillow is the only dependency** - everything else is
 `ctypes` against `user32`/`kernel32`.
 
 ---
@@ -39,8 +43,25 @@ pip install pillow           # the only dependency
 
 Then just ask, in whatever words you'd use:
 
-> "Open the config in Notepad and change the port to 8080."
+> "Open the MES app and pull up today's production numbers."
+> "Something's wrong with my PC and I can't tell what — go look."
+> "This installer is stuck on a dialog. Read it and get past it."
 > "RDP into the server and tell me why the app pool keeps dying."
+
+---
+
+## Two ways it gets used
+
+**Driving apps that have no API.** Shop-floor MES and ERP clients, JDeveloper/Swing and
+WinForms tools, Delphi and VB6 holdovers, installer wizards, Device Manager, IIS Manager.
+If a person can click it, this can click it — no automation interface required.
+
+**Looking at problems you can't diagnose.** An error dialog you don't recognize, a service
+that won't start, a machine that got slow. Claude reads the dialog (often via `Ctrl+C`,
+which copies the full text on most Windows error boxes), opens Event Viewer, checks Task
+Manager, and reports what it actually saw — separating what it read from what it inferred.
+
+`references/local-apps.md` covers both in depth.
 
 ---
 
@@ -89,10 +110,11 @@ RuntimeError: window not found      # nothing was typed
 
 ---
 
-## RDP: the part browser tools can't do
+## RDP, when a server only gives you port 3389
 
-If a server has port 3389 open and nothing else — no WinRM, no SSH, no SMB — you can still
-work on it. A human connects with Remote Desktop; Claude drives the session.
+Same technique, one more target. If a server has 3389 open and nothing else — no WinRM,
+no SSH, no SMB — you can still work on it. A human connects with Remote Desktop;
+Claude drives the session.
 
 Commands go in through the clipboard. Results come back the same way:
 

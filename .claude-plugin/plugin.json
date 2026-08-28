@@ -1,6 +1,6 @@
 {
   "name": "claude-remote-computer",
-  "description": "Let Claude Code drive your Windows desktop — screenshot, look, then click and type. Unlike browser-only automation, this reaches PowerShell, File Explorer, installers, IIS Manager, legacy GUI apps, and remote servers over RDP. Pure ctypes + Pillow: nothing to install beyond Pillow, no admin rights, no extension. Ships a focus guard that refuses to send input when the target window is not in front, so keystrokes never leak into the wrong app.",
+  "description": "Let Claude Code see your screen and use your computer. Drives GUI apps that have no API - shop-floor MES/ERP, JDeveloper and WinForms legacy tools, installers, Device Manager, PowerShell - and diagnoses PC problems by actually looking: error dialogs, Event Viewer, Task Manager. Remote servers over RDP work the same way. Pure ctypes + Pillow: no extension, no admin rights. A focus guard refuses to send input unless the target window is in front, so keystrokes never leak into the wrong app.",
   "version": "0.1.0",
   "author": {
     "name": "maroLee0409"
