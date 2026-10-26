@@ -507,8 +507,8 @@ def bg_click(substr, x, y, kind="click"):
         time.sleep(0.03)
     time.sleep(0.15)
     covered = _pid(hwnd_at(x, y)) != _pid(top)
-    return "%s (%d,%d)%s" % (_class(h), pt.x, pt.y, "  [주의] 그 자리를 %r 이(가) 덮고 있다 - 버튼이면 안 눌린다"
-                             "(입력칸은 된다). 덮이지 않게 옮길 것, pitfalls 11" % window_at(x, y) if covered else "")
+    return "%s (%d,%d)%s" % (_class(h), pt.x, pt.y, "  [주의] 그 자리를 %r 이(가) 덮고 있다 - WinForms 버튼·직접 그린 버튼이면"
+                             " 안 눌린다(입력칸·트리 같은 기본 컨트롤은 된다). shot --bg 로 확인, pitfalls 11" % window_at(x, y) if covered else "")
 
 
 class GUITHREADINFO(ctypes.Structure):
