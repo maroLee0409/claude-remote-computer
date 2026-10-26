@@ -35,8 +35,17 @@ CLI
 
   python rc.py shot out.png --bg "MES"          뒤에서: 가려진 창도 그 창만 찍는다 (앞으로 안 가져옴)
   python rc.py click X Y --bg "MES" --img out.png   뒤에서: 마우스 안 움직이고 그 창에 클릭 메시지만
-                                               dblclick / rclick 도 된다. 최소화된 창은 안 된다
-  python rc.py type "글자" --bg "MES"           뒤에서: 그 창의 포커스 칸에 입력.  key enter --bg 도 (키 하나만)
+                                               dblclick / rclick 도 된다. 최소화된 창은 안 된다(복원하면 포커스를 가져간다)
+  python rc.py type "글자" --bg "MES"           뒤에서: 그 창의 포커스 칸에 입력
+  python rc.py key enter --bg "MES"             뒤에서: 키 하나, 또는 ctrl·shift 조합 (key ctrl a --bg "MES")
+  python rc.py copy --bg "MES" [out.tsv]        뒤에서: 포커스 칸(그리드)에서 Ctrl+C 한 글. 사용자 클립보드는 빌렸다 돌려놓는다
+  python rc.py paste "TSV|@파일" --bg "MES"     뒤에서: 클립보드를 빌려 Ctrl+V (그리드에 여러 칸)
+                                               --bg 입력은 사용자가 그 창을 쓰는 중이면(포그라운드) 안 보내고,
+                                               보낸 뒤 그 창이 앞으로 왔으면 종료코드 1 로 멈춘다
+  python rc.py xl get "A1:C10" [--book "제목"] [--sheet "시트"]   엑셀 범위를 TSV 로 (COM - 화면·키보드·클립보드 안 씀)
+  python rc.py xl set "A1" "TSV|@파일" [--book ...]               엑셀에 넣기. 저장은 안 한다
+  python rc.py park "MES"                       창을 모니터 밖으로 (활성화 안 함). 화면을 안 가리고 덮인 버튼 문제도 없다
+  python rc.py park "MES" back                  주 모니터로 되돌리기
   python rc.py record out.gif [최대초] --bg "MES"  그 창만 뒤에서 녹화 (백그라운드로 띄워 두고 조작)
   python rc.py record stop                      녹화를 멈추고 GIF 저장
   python rc.py launch "바로가기 이름" [초]       시작 메뉴·바탕화면 바로가기를 일반 권한으로 실행, 새로 뜬 창 제목을 찍는다
@@ -60,7 +69,7 @@ CLI
   python rc.py waitstable [x y w h] [초]        화면이 1초 동안 안 바뀔 때까지 (로딩 끝 대기)
 
   python rc.py ui controls "창" [필터]          이 PC 창의 컨트롤 목록 (UI Automation, rc-agent.ps1)
-  python rc.py ui invoke "창" "조회"            이름/AutomationId 로 누르기 - 좌표 없음
+  python rc.py ui invoke "창" "조회"            이름/AutomationId 로 누르기 - 좌표 없음. 창을 앞으로 가져온다(뒤에서는 click --bg)
   python rc.py ui get|set "창" "이름" [값]       값 읽기/넣기.  windows / fg / focus / wait 도 된다
 
   python rc.py remote boot|push|hello          RDP 세션 안에 rc-agent 띄우기 (references/rdp.md)
@@ -79,6 +88,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 
 from PIL import Image, ImageChops, ImageGrab, PngImagePlugin
 
@@ -381,9 +391,10 @@ def launch(name, timeout=60):
 
     매니페스트가 관리자를 요구해도(requireAdministrator) RunAsInvoker 로 일반 권한으로 띄운다.
     권한을 올리는 게 아니라 내리는 것이라 UAC 를 건너뛰는 게 아니다. 대신 그 앱이 Program Files 에 쓰는 일
-    (자동 업데이트, 실행 중 캐시·설정 저장)은 실패한다. 실행 중에 쓰는 앱이면 깨진다 - pitfalls 12.
+    (자동 업데이트, 실행 중 캐시·설정 저장)은 실패한다. 실행 중에 쓰는 앱이면 깨진다 - 그런 앱은 사용자 폴더에
+    사본을 두고 그 exe 경로를 name 으로 준다(pitfalls 12). name 이 있는 파일 경로면 바로가기를 찾지 않는다.
     """
-    lnk = find_shortcut(name)
+    lnk = name if os.path.isfile(name) else find_shortcut(name)
     before = {h for h, _ in _top_windows()}
 
     def new():
@@ -392,7 +403,10 @@ def launch(name, timeout=60):
 
     os.environ["__COMPAT_LAYER"] = "RunAsInvoker"   # 자식 프로세스가 물려받는다
     try:
-        os.startfile(lnk)
+        if lnk.lower().endswith(".lnk"):
+            os.startfile(lnk)   # 작업 폴더는 바로가기에 적힌 것
+        else:
+            os.startfile(lnk, cwd=os.path.dirname(os.path.abspath(lnk)))   # exe 는 자기 폴더에서 - 설정 파일을 상대 경로로 찾는다
     finally:
         del os.environ["__COMPAT_LAYER"]
     first = wait_for(new, timeout)
@@ -439,6 +453,9 @@ class BITMAPINFOHEADER(ctypes.Structure):
 def bg_window(substr):
     """--bg 대상 창 핸들. 없거나 최소화면 예외 - 최소화된 창은 그리지도 않아서 찍을 수도 누를 수도 없다.
 
+    복원해 주지 않는다. 그 스레드에서 한 번이라도 활성이었던 창은 어떻게 복원해도(SW_SHOWNOACTIVATE 포함)
+    포그라운드를 가져가서, 사용자가 치는 키가 그 창으로 간다(pitfalls 14).
+
     같은 제목이 여럿이면 다룰 수 있는 것(rc.py 보다 권한이 높지 않은 것)을 고른다 -
     관리자로 뜬 것과 launch 로 다시 띄운 것이 같이 있을 때 앞에 있는 관리자 창을 잡지 않게.
     """
@@ -448,9 +465,31 @@ def bg_window(substr):
     me = integrity(os.getpid())
     h = next((h for h in hits if (integrity(_pid(h)) or 0) <= (me or 0)), hits[0])
     if user32.IsIconic(h):
-        raise RuntimeError("최소화된 창이다 - 뒤로 두는 건 되지만 최소화는 안 된다: %r" % substr)
+        raise RuntimeError("최소화된 창이다 - 사용자가 다른 모니터나 뒤쪽에 복원해 둘 것(복원하면 포커스를 가져간다): %r" % substr)
     require_same_level(h, substr)
     return h
+
+
+user32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
+SWP_MOVE_ONLY = 0x0001 | 0x0004 | 0x0010   # NOSIZE | NOZORDER | NOACTIVATE
+
+
+def park(substr, back=False):
+    """창을 모니터 밖(가상 화면 오른쪽)으로 옮긴다. 활성화하지 않는다 - 포커스를 안 뺏는다(실측). 옮긴 뒤 (x, y, w, h).
+
+    사용자 화면을 안 가리고, 그 자리를 덮을 창이 없으니 덮이면 안 눌리던 버튼(pitfalls 11)도 --bg 로 눌린다.
+    찍기·누르기·넣기·ui 전부 그대로 된다. back 이면 주 모니터 왼쪽 위로 되돌린다.
+    창 위치를 저장했다가 다음에 그 자리로 뜨는 앱이면, 닫기 전에 되돌려 둔다(pitfalls 11).
+    """
+    h = bg_window(substr)
+    if back:
+        x, y = 50, 50   # 주 모니터 왼쪽 위가 화면 좌표 (0,0)
+    else:
+        x = user32.GetSystemMetrics(SM_XVIRTUALSCREEN) + user32.GetSystemMetrics(SM_CXVIRTUALSCREEN) + 100
+        y = user32.GetSystemMetrics(SM_YVIRTUALSCREEN) + 100
+    if not user32.SetWindowPos(h, None, x, y, 0, 0, SWP_MOVE_ONLY):
+        raise OSError("SetWindowPos 실패(%s)" % ctypes.get_last_error())
+    return _rect(h)
 
 
 def grab_window(h):
@@ -480,17 +519,37 @@ def _class(h):
     return b.value
 
 
+@contextmanager
+def _fg_guard(top, what):
+    """--bg 입력 앞뒤 확인. 사용자가 그 창을 쓰고 있으면(포그라운드) 보내지 않고, 보낸 뒤 그 창이 앞으로 왔으면 멈춘다.
+
+    앞으로 오는 건 막지 못한다 - 입력칸을 누르면 SetFocus 가 창 활성화로 번지는데, Windows 가 그때 포그라운드까지
+    줄 때가 있다(pitfalls 15). 되돌리지도 않는다 - 최소화로 되돌리면 최소화된 채 포그라운드를 쥐기도 한다(pitfalls 14).
+    """
+    if foreground()[0] == top:
+        raise RuntimeError("사용자가 %r 를 쓰고 있다(포그라운드) - 뒤에서 보내지 않는다" % what)
+    yield
+    if foreground()[0] == top:
+        raise RuntimeError("%r 가 앞으로 왔다 - 사용자 키가 이 창으로 간다. 멈추고 사용자에게 알릴 것"
+                           "(사용자가 자기 창을 다시 누르면 계속할 수 있다, pitfalls 15)" % what)
+
+
 def bg_click(substr, x, y, kind="click"):
     """스크린샷 좌표 (x, y) 를 그 창 안에서 찾아 가장 안쪽 자식 창에 클릭 메시지를 보낸다.
 
     WindowFromPoint 가 아니라 그 창의 자식만 따라 내려가므로, 다른 창이 위를 덮고 있어도 그 창에 간다.
     """
     top = bg_window(substr)
+    with _fg_guard(top, substr):
+        return _bg_click(top, x, y, kind)
+
+
+def _bg_click(top, x, y, kind):
     sx, sy = to_screen(x, y)
     r = wt.RECT()
     user32.GetWindowRect(top, ctypes.byref(r))
     if not (r.left <= sx < r.right and r.top <= sy < r.bottom):
-        raise RuntimeError("그 좌표는 %r 창 밖이다" % substr)
+        raise RuntimeError("그 좌표는 그 창 밖이다")
     h = top
     while True:
         pt = wt.POINT(sx, sy)
@@ -519,15 +578,19 @@ class GUITHREADINFO(ctypes.Structure):
                 ("hwndCaret", wt.HWND), ("rcCaret", wt.RECT)]
 
 
-WM_KEYDOWN, WM_KEYUP, WM_CHAR = 0x0100, 0x0101, 0x0102
+WM_NULL, WM_KEYDOWN, WM_KEYUP, WM_CHAR = 0, 0x0100, 0x0101, 0x0102
+SMTO_ABORTIFHUNG = 0x2
+user32.SendMessageTimeoutW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM, wt.UINT, wt.UINT,
+                                       ctypes.POINTER(ctypes.c_size_t)]
+user32.SendMessageTimeoutW.restype = ctypes.c_ssize_t
+KEYSTATE = ctypes.c_ubyte * 256
 
 
-def bg_focus(substr):
+def bg_focus(top, substr):
     """그 창 안에서 키보드 포커스를 가진 컨트롤. 포커스는 스레드마다 따로 기억돼서 창이 뒤에 있어도 남아 있다.
 
     포커스가 그 창 밖(같은 앱의 다른 대화상자 등)에 있으면 예외 - 글자가 엉뚱한 칸에 들어가지 않게.
     """
-    top = bg_window(substr)
     gi = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
     if not user32.GetGUIThreadInfo(user32.GetWindowThreadProcessId(top, None), ctypes.byref(gi)) or not gi.hwndFocus:
         raise RuntimeError("%r 안에 포커스 가진 칸이 없다 - 먼저 click --bg 로 입력칸을 누를 것" % substr)
@@ -543,26 +606,121 @@ def _post(h, m, wp, lp):
 
 def bg_type(substr, text):
     """포커스 칸에 글자를 WM_CHAR 로. 한글도 IME 없이 들어간다. (컨트롤 클래스, 글자 수)"""
-    h = bg_focus(substr)
-    # UTF-16 단위로 보낸다 - 이모지 같은 서로게이트 쌍도 두 번에 나눠 들어가야 맞다. 줄바꿈은 엔터(\r).
-    for u in memoryview(text.replace("\r\n", "\n").replace("\n", "\r").encode("utf-16-le")).cast("H"):
-        _post(h, WM_CHAR, u, 1)
-    time.sleep(0.15)
+    top = bg_window(substr)
+    with _fg_guard(top, substr):
+        h = bg_focus(top, substr)
+        # UTF-16 단위로 보낸다 - 이모지 같은 서로게이트 쌍도 두 번에 나눠 들어가야 맞다. 줄바꿈은 엔터(\r).
+        for u in memoryview(text.replace("\r\n", "\n").replace("\n", "\r").encode("utf-16-le")).cast("H"):
+            _post(h, WM_CHAR, u, 1)
+        time.sleep(0.15)
     return _class(h), len(text)
 
 
+def _sync(h):
+    """h 의 스레드가 메시지를 한 번 꺼낼 때까지 기다린다(WM_NULL 왕복). 멈춘 앱이면 예외."""
+    if not user32.SendMessageTimeoutW(h, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 5000, ctypes.byref(ctypes.c_size_t())):
+        raise OSError("앱이 응답하지 않는다(5초)")
+
+
+@contextmanager
+def _held(h, vks):
+    """h 의 스레드가 보는 키 상태에서만 vks 를 눌린 것으로 만든다. 끝나면(예외여도) 떼고 붙인 것도 푼다.
+
+    AttachThreadInput 으로 붙은 두 스레드만 키 상태를 같이 본다 - 사용자의 진짜 키보드(GetAsyncKeyState)와
+    사용자가 쓰는 앱의 키 상태는 안 바뀐다. 단 그 창이 포그라운드면 사용자 키가 Ctrl 로 보이니 _fg_guard 가 먼저 막는다.
+    """
+    if not vks:
+        yield
+        return
+    me, tid = k32.GetCurrentThreadId(), user32.GetWindowThreadProcessId(h, None)
+    if not user32.AttachThreadInput(me, tid, True):
+        raise OSError("AttachThreadInput 실패(%s) - 아무것도 안 보냈다" % ctypes.get_last_error())
+    ks = KEYSTATE()
+    try:
+        user32.GetKeyboardState(ks)
+        for v in vks:
+            ks[v] |= 0x80
+        if not user32.SetKeyboardState(ks):
+            raise OSError("SetKeyboardState 실패(%s) - 아무것도 안 보냈다" % ctypes.get_last_error())
+        yield
+    finally:
+        for v in vks:
+            ks[v] &= 0x7F
+        user32.SetKeyboardState(ks)
+        user32.AttachThreadInput(me, tid, False)
+
+
+MODS = {"ctrl": (0x11, 0xA2), "control": (0x11, 0xA2), "shift": (0x10, 0xA0)}   # 앱마다 VK_CONTROL·VK_LCONTROL 중 어느 쪽을 볼지 몰라 둘 다
+
+
 def bg_key(substr, *names):
-    """포커스 칸에 키 하나(enter·tab·f5 등). 조합키는 앱이 실제 키보드 상태(GetKeyState)를 봐서 안 먹는다."""
-    if len(names) != 1:
-        raise RuntimeError("--bg 로는 키 하나만 된다 - 조합키(ctrl+s 등)는 버튼을 click --bg 로 누를 것")
-    vk = VK[names[0].lower()]
-    h = bg_focus(substr)
-    lp = 1 | user32.MapVirtualKeyW(vk, 0) << 16 | (1 << 24 if vk in EXTENDED else 0)
-    _post(h, WM_KEYDOWN, vk, lp)   # 글자 키면 앱의 TranslateMessage 가 WM_CHAR 를 만든다
-    time.sleep(0.03)
-    _post(h, WM_KEYUP, vk, lp | 0xC0000000)
-    time.sleep(0.15)
+    """포커스 칸에 키 하나(enter·tab·f5 등), 또는 ctrl·shift 조합(ctrl c, ctrl shift end).
+
+    앱은 조합을 메시지가 아니라 실제 키 상태(GetKeyState)로 본다. 그래서 _held 로 그 창 스레드가 보는 상태만 바꾸고 보낸다.
+    앱이 키를 다 꺼내 처리할 때까지 쥐고 있다가 뗀다 - 먼저 떼면 Ctrl 없는 C 가 되어 그리드 셀에 c 가 타이핑된다.
+    """
+    *mods, last = [n.lower() for n in names]
+    if any(m not in MODS for m in mods):
+        raise RuntimeError("--bg 조합키는 ctrl·shift 만 된다(alt·win 은 안 된다) - 그 버튼을 click --bg 로 누를 것")
+    keys = [MODS[m][0] for m in mods] + [VK[last]]
+    lp = {v: 1 | user32.MapVirtualKeyW(v, 0) << 16 | (1 << 24 if v in EXTENDED else 0) for v in keys}
+    msgs = [(WM_KEYDOWN, v, lp[v]) for v in keys] + [(WM_KEYUP, v, lp[v] | 0xC0000000) for v in reversed(keys)]
+    top = bg_window(substr)
+    with _fg_guard(top, substr):
+        h = bg_focus(top, substr)
+        _sync(h)   # 멈춘 앱이면 붙기 전에 그만둔다
+        with _held(h, [v for m in mods for v in MODS[m]]):
+            for m, v, l in msgs:
+                _post(h, m, v, l)   # 글자 키면 앱의 TranslateMessage 가 WM_CHAR 를 만든다
+            # ponytail: WM_NULL 왕복 한 번 = 앱이 메시지를 한 번 꺼냄. Peek·Get 이 두 번씩 꺼내도 되게 2배로 기다린다
+            for _ in range(2 * len(msgs) + 2):
+                _sync(h)
+        time.sleep(0.15)
     return _class(h)
+
+
+def _clip_save():
+    """클립보드를 빌리기 전에 사용자 것(글)을 받아 둔다. 글 없이 파일·그림만 있으면 돌려놓을 수 없어서 멈춘다.
+    글과 서식이 같이 있으면(엑셀에서 복사한 것 등) 글만 돌려놓는다."""
+    if user32.CountClipboardFormats() and not user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+        raise RuntimeError("클립보드에 글이 아닌 것(파일·그림)이 있어 빌리지 않는다 - 사용자에게 물을 것")
+    return _clip_or_empty()
+
+
+def _clip_restore(saved, seq):
+    """클립보드 순번이 seq 그대로면 사용자 것을 돌려놓는다. 바뀌었으면 그사이 사용자가 복사한 것이니 둔다."""
+    if user32.GetClipboardSequenceNumber() != seq:
+        return False
+    set_clipboard(saved)
+    return True
+
+
+def bg_copy(substr):
+    """포커스 칸(그리드 등)에서 Ctrl+C 한 글을 돌려준다. 사용자 클립보드는 빌렸다가 돌려놓는다. (글, 돌려놨나)
+    여러 행이 필요하면 먼저 bg_key(창, "ctrl", "a") 나 행을 click --bg."""
+    saved, seq = _clip_save(), user32.GetClipboardSequenceNumber()
+    bg_key(substr, "ctrl", "c")
+    if not wait_for(lambda: user32.GetClipboardSequenceNumber() != seq, 3, 0.05):
+        raise RuntimeError("Ctrl+C 를 보냈는데 클립보드가 안 바뀌었다 - 선택된 게 없거나 복사를 안 받는 칸")
+    time.sleep(0.25)   # 앱이 형식을 다 올리고, 클립보드 기록(Win+V)이 놓아줄 때까지
+    try:
+        text = get_clipboard()
+    finally:
+        restored = _clip_restore(saved, user32.GetClipboardSequenceNumber())
+    return text, restored
+
+
+def bg_paste(substr, text):
+    """클립보드를 빌려 text 를 넣고 Ctrl+V - 그리드에 TSV 를 여러 칸 붙일 때. 끝나면 사용자 클립보드를 돌려놓는다. 돌려놨나"""
+    saved = _clip_save()
+    set_clipboard(text)
+    seq = user32.GetClipboardSequenceNumber()
+    try:
+        time.sleep(0.3)   # 넣은 직후엔 클립보드 기록(Win+V)이 쥐고 있어서 앱의 붙이기가 빈 글이 된다
+        bg_key(substr, "ctrl", "v")   # 앱이 Ctrl+V 를 처리한 뒤에 돌아온다 - 그 전에 돌려놓으면 사용자 것이 붙는다
+    finally:
+        restored = _clip_restore(saved, seq)
+    return restored
 
 
 # ─────────────────────────────────────────────── 마우스
@@ -839,6 +997,8 @@ def record(path, h, max_sec=1800, fps=2, max_edge=1280):
     frames, durs, last = [], [], None
     start = t_last = time.time()
     while time.time() - start < max_sec and not os.path.exists(REC_STOP):
+        if user32.IsIconic(h):   # 녹화 중에 최소화됐다 - 복원하면 포커스를 가져가니 거기까지 저장
+            break
         try:
             img = grab_window(h)
         except OSError:   # 창이 닫혔다 - 거기까지 저장
@@ -854,7 +1014,7 @@ def record(path, h, max_sec=1800, fps=2, max_edge=1280):
             last, t_last = img, now
         time.sleep(max(0, 1 / fps - (time.time() - now)))
     if not frames:
-        raise RuntimeError("한 장도 못 찍었다 - 창이 최소화됐거나 닫혔다")
+        raise RuntimeError("한 장도 못 찍었다 - 창이 닫혔거나 최소화됐다")
     durs.append(max(500, int((time.time() - t_last) * 1000)))
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=durs, loop=0)
     return len(frames), time.time() - start
@@ -887,6 +1047,7 @@ def _clip_starting(prefix):
 
 # ─────────────────────────────────────────────── UI Automation / RDP 도우미 (rc-agent.ps1)
 AGENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rc-agent.ps1")
+CREATE_NO_WINDOW = 0x08000000
 TOKEN_FILE = os.path.join(tempfile.gettempdir(), "rc_agent_token.txt")
 # 세션 안 PowerShell 에 붙여넣을 한 줄. 엔터 전에 `remote push` 로 클립보드를 스크립트로 바꿔 두면
 # 엔터 순간 클립보드(=스크립트)를 파일로 저장하고 실행한다. 평문이라 AMSI 에 안 걸린다.
@@ -898,8 +1059,66 @@ BOOT = ('Add-Type -A System.Windows.Forms; $f="$env:TEMP/rc-agent.ps1"; '
 def ui(cmd, *args):
     """이 PC 에서 rc-agent.ps1 을 한 번 실행. (성공여부, 출력)"""
     r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", AGENT,
-                        "-Once", cmd, *args], capture_output=True)
+                        "-Once", cmd, *args], capture_output=True, creationflags=CREATE_NO_WINDOW)   # 콘솔 창이 안 번쩍이게
     return r.returncode == 0, r.stdout.decode("utf-8", "replace").strip()
+
+
+# ─────────────────────────────────────────────── 엑셀 - 화면·키보드·클립보드 없이 COM 으로 (rc-agent.ps1)
+XL_TSV = os.path.join(tempfile.gettempdir(), "rc_xl_%d.tsv" % os.getpid())
+
+
+def xl_window(book=None):
+    """통합 문서 창 안쪽 EXCEL7 핸들. book 은 창 제목 일부.
+
+    안 주면 엑셀 창이 하나뿐일 때만 - 여럿이면 엉뚱한 통합 문서에 쓰지 않게 멈춘다.
+    ROT(GetActiveObject) 대신 창으로 찾는 이유: Claude 가 관리자고 엑셀이 일반 권한이면 ROT 가 갈려 안 보인다.
+    """
+    xls = [(h, t) for h, t in _top_windows() if _class(h) == "XLMAIN"]
+    hits = [(h, t) for h, t in xls if not book or book.lower() in t.lower()]
+    if len(hits) != 1:
+        raise RuntimeError("엑셀 창이 %s - 창 제목 일부를 --book 으로 줄 것. 떠 있는 것: %r"
+                           % ("여럿이다" if hits else "없다", [t for _, t in xls]))
+    found = []
+
+    def cb(h, _):
+        if _class(h) == "EXCEL7":
+            found.append(h)
+            return False
+        return True
+
+    user32.EnumChildWindows(hits[0][0], ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)(cb), 0)
+    if not found:
+        raise RuntimeError("%r 안에 시트 창(EXCEL7)이 없다" % hits[0][1])
+    return found[0]
+
+
+def _xl(cmd, book, sheet, *args):
+    ok, out = ui(cmd, str(xl_window(book)), *args, *([sheet] if sheet else []))
+    if not ok:
+        raise RuntimeError(out[4:] if out.startswith("ERR ") else out)
+    return out
+
+
+def xl_get(rng, book=None, sheet=None):
+    """엑셀 범위를 TSV 글로(행은 \\n, 칸은 \\t). sheet 없으면 그 창의 활성 시트. 창은 앞으로 안 온다."""
+    _xl("xlget", book, sheet, rng, XL_TSV)
+    try:
+        return open(XL_TSV, encoding="utf-8").read()
+    finally:
+        os.remove(XL_TSV)
+
+
+def xl_set(cell, tsv, book=None, sheet=None):
+    """cell(왼쪽 위)부터 TSV 를 넣고, 넣은 범위 주소를 돌려준다. 저장은 안 한다.
+
+    엑셀이 입력처럼 해석한다 - 숫자처럼 보이는 글은 숫자가 된다(LOT 00123 → 123). 글로 지키려면 앞에 ' 를 붙인다.
+    """
+    with open(XL_TSV, "w", encoding="utf-8") as f:
+        f.write(tsv)
+    try:
+        return _xl("xlset", book, sheet, cell, XL_TSV)
+    finally:
+        os.remove(XL_TSV)
 
 
 def remote_hello(timeout=60):
@@ -936,12 +1155,18 @@ def main(argv):
     ap.add_argument("args", nargs="*")
     ap.add_argument("--focus", help="입력 전에 이 창을 포그라운드로. 실패하면 입력하지 않고 종료")
     ap.add_argument("--window", help="shot: 이 창 영역만 잘라서 캡처")
-    ap.add_argument("--bg", help="shot·click·dblclick·rclick: 이 창을 앞으로 안 가져오고 뒤에서 (가려져 있어도 됨)")
+    ap.add_argument("--bg", help="shot·click·type·key·copy·paste: 이 창을 앞으로 안 가져오고 뒤에서 (가려져 있어도 됨)")
     ap.add_argument("--scale", type=float, help="shot: 축소 비율")
     ap.add_argument("--img", help="좌표를 이 캡처 PNG 에서 읽었다 - 자른 영역·축소를 되돌린다")
     ap.add_argument("--timeout", type=float, default=120, help="remote: 응답 기다리는 시간(초)")
+    ap.add_argument("--book", help="xl: 엑셀 창 제목 일부 (엑셀 창이 여럿일 때)")
+    ap.add_argument("--sheet", help="xl: 시트 이름 (없으면 그 창의 활성 시트)")
     a = ap.parse_args(argv)
     c, rest = a.cmd, a.args
+
+    def text_arg(s):
+        """'@경로' 면 그 파일 내용 - 탭·줄바꿈이 든 TSV 를 명령줄로 넘기기 번거로울 때."""
+        return open(s[1:], encoding="utf-8-sig").read() if s.startswith("@") and os.path.isfile(s[1:]) else s
 
     def P(x, y):
         return img_to_shot(a.img, x, y) if a.img else (int(x), int(y))
@@ -1006,9 +1231,31 @@ def main(argv):
     elif c == "scroll":
         scroll(int(rest[0]), *(P(rest[1], rest[2]) if len(rest) >= 3 else ())); print("scrolled")
     elif c == "key" and a.bg:
-        _p("뒤에서 key %s -> %s" % (rest[0] if rest else "", bg_key(a.bg, *rest)))
-    elif c in ("type", "paste") and a.bg:
+        _p("뒤에서 key %s -> %s" % ("+".join(rest), bg_key(a.bg, *rest)))
+    elif c == "type" and a.bg:
         _p("뒤에서 typed %d chars -> %s" % bg_type(a.bg, rest[0])[::-1])
+    elif c == "paste" and a.bg:
+        t = text_arg(rest[0])
+        restored = bg_paste(a.bg, t)
+        _p("뒤에서 pasted %d chars%s" % (len(t), "" if restored else "  [주의] 그사이 클립보드가 바뀌어(사용자가 복사?) 돌려놓지 않았다"))
+    elif c == "copy":
+        if not a.bg:
+            _p("copy 는 --bg \"창\" 이 있어야 한다 (그 창의 포커스 칸에서 Ctrl+C)"); return 1
+        t, restored = bg_copy(a.bg)
+        if not restored:
+            _p("[주의] 그사이 클립보드가 바뀌어(사용자가 복사?) 돌려놓지 않았다", sys.stderr)
+        if rest:
+            open(rest[0], "w", encoding="utf-8").write(t)
+            _p("saved %d chars -> %s" % (len(t), rest[0]))
+        else:
+            sys.stdout.buffer.write(t.encode("utf-8", "replace"))
+    elif c == "xl":
+        if rest[:1] == ["get"] and len(rest) == 2:
+            sys.stdout.buffer.write(xl_get(rest[1], a.book, a.sheet).encode("utf-8"))
+        elif rest[:1] == ["set"] and len(rest) == 3:
+            _p("set " + xl_set(rest[1], text_arg(rest[2]), a.book, a.sheet))
+        else:
+            _p("xl get \"A1:C10\" | xl set \"A1\" \"TSV|@파일\"  [--book \"제목 일부\"] [--sheet \"시트\"]"); return 1
     elif c == "key":
         key(*rest); print("key", "+".join(rest))
     elif c == "type":
@@ -1071,6 +1318,9 @@ def main(argv):
                 _p("시간 초과 (%g초): 화면이 안 바뀌었다" % sec); return 1
             ox, oy = (region or (0, 0))[:2]
             print("changed  %d,%d %dx%d" % (ox + bb[0], oy + bb[1], bb[2] - bb[0], bb[3] - bb[1]))
+    elif c == "park":
+        x, y, w, h = park(rest[0], back=rest[1:] == ["back"])
+        _p("%s %r -> %d,%d %dx%d" % ("되돌림" if rest[1:] == ["back"] else "화면 밖으로", rest[0], x, y, w, h))
     elif c == "record":
         if rest and rest[0] == "stop":
             open(REC_STOP, "w").close(); print("stop 요청 - 녹화 쪽이 저장하고 끝난다"); return 0
@@ -1087,8 +1337,13 @@ def main(argv):
                "  [관리자 권한 - rc.py 로 못 다룬다, pitfalls 12]" if lv and me and lv > me else ""))
         _p("  로그인 창이면 사용자가 직접 로그인한다(비밀번호는 넣지 않는다). 이후는 --bg \"창 제목\" 으로")
     elif c == "ui":
+        before = foreground()[0]
         ok, out = ui(*rest)
         _p(out)
+        fg = user32.GetAncestor(foreground()[0], 2)
+        if rest[0] in ("set", "invoke") and fg != before and fg == find_window(rest[1]):
+            _p("[주의] %r 가 앞으로 왔다 - 사용자 키가 이 창으로 간다. 멈추고 사용자에게 알릴 것."
+               " 뒤에서 할 땐 ui invoke 대신 click --bg (pitfalls 15)" % rest[1]); return 1
         return 0 if ok else 1
     elif c == "remote":
         sub, args = rest[0], rest[1:]

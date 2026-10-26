@@ -17,6 +17,7 @@ rc-agent.ps1 - UI Automation 도우미. 설치 없이 Windows 기본 .NET 만 �
 명령
   ping | windows | fg | focus <창> | wait <창> [초] | waitgone <창> [초]
   controls <창> [필터] | invoke <창> <이름|AutomationId> | get <창> <이름> | set <창> <이름> <값>
+  xlget <EXCEL7 핸들> <범위> <출력 TSV> [시트] | xlset <EXCEL7 핸들> <왼쪽 위 셀> <입력 TSV> [시트]   (rc.py xl 이 부른다)
   run <PowerShell 코드> | stop
 #>
 param([string]$Once, [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
@@ -39,6 +40,8 @@ public static void InitUia() {
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, IntPtr e);
 [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte sc, int f, IntPtr e);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, string l, uint f, uint t, out IntPtr r);
+[DllImport("oleacc.dll")] public static extern int AccessibleObjectFromWindow(IntPtr h, int id, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object o);
 '@
 # 좌표를 물리 화면 픽셀로 받는다 (rc.py 와 같은 모니터별 DPI v2, 없는 OS 면 시스템 DPI).
 try { if (-not [RcAgent.U]::SetProcessDpiAwarenessContext([IntPtr]-4)) { [RcAgent.U]::SetProcessDPIAware() | Out-Null } }
@@ -145,6 +148,28 @@ function Wait-Win($title, $sec, $gone) {
     throw "시간 초과 ($sec 초): $title"
 }
 
+# 엑셀 - 통합 문서 창(EXCEL7)에서 그 창의 Window 개체를 받아 시트에 COM 으로 붙는다. 화면·키보드·클립보드를 안 쓰고 창도 안 움직인다.
+# Value2 만 쓴다 - Select·Activate·Copy·Visible 처럼 사용자 화면·선택을 바꾸는 멤버는 쓰지 않는다.
+function Xl-Sheet($h, $sheet) {
+    $iid = [Guid]'{00020400-0000-0000-C000-000000000046}'; $w = $null   # IDispatch
+    if ([RcAgent.U]::AccessibleObjectFromWindow([IntPtr][int64]$h, -16, [ref]$iid, [ref]$w) -ne 0) { throw "엑셀 창에 못 붙었다: $h" }   # -16 = OBJID_NATIVEOM
+    if ($sheet) { $w.Parent.Worksheets.Item($sheet) } else { $w.ActiveSheet }
+}
+
+# 셀 편집 중이거나 대화상자가 떠 있으면 엑셀이 호출을 바로 거절한다(0x80010001) - 1초 간격 세 번 해 보고 멈춘다.
+function Xl-Try($block) {
+    for ($i = 1; ; $i++) {
+        try { return & $block }
+        catch {
+            if ($_.Exception.ToString() -notmatch '80010001') { throw }
+            if ($i -ge 3) { throw "엑셀이 바쁘다(셀 편집 중이거나 대화상자) - 사용자가 끝내면 다시" }
+            Start-Sleep 1
+        }
+    }
+}
+
+function Xl-Cell($x) { if ($null -eq $x) { '' } else { ([string]$x) -replace "[`t`r`n]", ' ' } }   # 칸 안의 탭·줄바꿈은 TSV 를 깨니 공백으로
+
 function Invoke-Rc($cmd, [string[]]$a) {
     switch ($cmd) {
         'ping' { "pong $env:COMPUTERNAME $env:USERNAME $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" }
@@ -176,9 +201,33 @@ function Invoke-Rc($cmd, [string[]]$a) {
         }
         'set' {
             $el = @(Find-El $a[0] $a[1])[0]
+            # Win32 입력칸은 WM_SETTEXT 로 - ValuePattern.SetValue 는 그 칸에 포커스를 줘서 창이 앞으로 오고 사용자 키가 그리로 샌다
+            $h = [IntPtr]$el.Current.NativeWindowHandle; $r = [IntPtr]::Zero
+            if ($h -ne [IntPtr]::Zero -and $el.Current.ClassName -match 'EDIT') {
+                if ([RcAgent.U]::SendMessageTimeout($h, 0x000C, [IntPtr]::Zero, $a[2], 2, 5000, [ref]$r) -eq [IntPtr]::Zero) { throw "응답 없음(5초): $(Show $el)" }
+                return "set : $(Show $el)"
+            }
             $p = Pat $el ([System.Windows.Automation.ValuePattern])
             if (-not $p) { throw "값을 넣을 수 없는 컨트롤: $(Show $el)" }
             $p.SetValue($a[2]); "set : $(Show $el)"
+        }
+        'xlget' {
+            # 결과는 파일로 - 표준출력은 Out-String·TrimEnd 를 거치며 줄 끝 빈 칸(탭)이 잘린다.
+            # 글로 바꾸는 것까지 블록 안에서 - 2차원 배열을 함수 밖으로 돌려주면 PowerShell 이 1차원으로 풀어 버린다.
+            $t = Xl-Try {
+                $v = (Xl-Sheet $a[0] $a[3]).Range($a[1]).Value2
+                if ($v -isnot [Array]) { Xl-Cell $v } else {
+                    (1..$v.GetLength(0) | ForEach-Object { $r = $_; (1..$v.GetLength(1) | ForEach-Object { Xl-Cell $v[$r, $_] }) -join "`t" }) -join "`n"
+                }
+            }
+            [IO.File]::WriteAllText($a[2], $t, (New-Object Text.UTF8Encoding $false)); 'ok'
+        }
+        'xlset' {
+            $rows = @(([IO.File]::ReadAllText($a[2], [Text.Encoding]::UTF8) -replace "`r", '').TrimEnd("`n") -split "`n")
+            $nc = ($rows | ForEach-Object { ($_ -split "`t").Count } | Measure-Object -Maximum).Maximum
+            $arr = New-Object 'object[,]' $rows.Count, $nc
+            for ($r = 0; $r -lt $rows.Count; $r++) { $c = 0; foreach ($x in $rows[$r] -split "`t") { $arr[$r, $c++] = $x } }
+            Xl-Try { $rg = (Xl-Sheet $a[0] $a[3]).Range($a[1]).Resize($rows.Count, $nc); $rg.Value2 = $arr; $rg.Address($false, $false) }
         }
         'run' { & ([scriptblock]::Create(($a -join "`n"))) *>&1 | Out-String -Width 250 }
         'stop' { 'bye' }
