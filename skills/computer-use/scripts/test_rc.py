@@ -79,7 +79,7 @@ try:
     time.sleep(0.5)
     me = rc.find_window("rc selftest")
     assert rc.foreground()[0] != me
-    assert rc.integrity(rc._pid(me)) == rc.integrity(os.getpid()) == 0x2000, "권한 읽기가 틀렸다(관리자로 돌렸다면 일반 권한으로)"
+    assert rc.integrity(rc._pid(me)) == rc.integrity(os.getpid()) in (0x2000, 0x3000), "권한 읽기가 틀렸다"   # 일반·관리자 둘 다
     rc.bg_click("rc selftest", *center(ctl["txtLot"]))
     rc.bg_type("rc selftest", "한글2")
     rc.bg_click("rc selftest", *center(ctl["btnSearch"]))   # 버튼 자리는 안 덮였다 - 덮이면 WinForms 가 Click 을 안 낸다(pitfalls 11)

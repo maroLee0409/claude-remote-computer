@@ -117,7 +117,8 @@ python "$RC" waitstable --bg "MES" 10                 # 확인·대기도 뒤에
   python "$RC" windows                                # 이미 떠 있는지 먼저 본다 - launch 는 안 본다
   python "$RC" launch "바로가기 이름"                 # 시작 메뉴·바탕화면 바로가기 실행 -> 새로 뜬 창 제목을 찍는다
   ```
-  관리자를 요구하는 앱도 일반 권한으로 띄운다(RunAsInvoker). 그 앱의 자동 업데이트는 안 된다 → `pitfalls.md` 12.
+  관리자를 요구하는 앱도 rc.py 와 같은 권한으로 띄운다(RunAsInvoker). 실행 중 설치 폴더에 쓰는 앱이면 일반 권한에선 깨진다
+  → 사용자가 Claude 를 관리자로 띄우면 앱도 관리자로 떠서 그대로 된다. `pitfalls.md` 12.
 - 같은 제목 창이 둘이면(관리자로 뜬 것 + launch 한 것) `--bg` 는 다룰 수 있는 쪽을 고른다. 헷갈리니 관리자 것은 사용자가 닫게 한다.
 - `--focus` 와 같이 못 쓴다. `--bg` 가 안 되면 앞으로 가져와 누르는 걸로 넘어가지 말고 멈춰서 보고한다.
 - 왜 이렇게 만들었는지: 저장소 `docs/design-background-control.md`.

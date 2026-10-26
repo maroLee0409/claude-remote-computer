@@ -378,8 +378,8 @@ def launch(name, timeout=60):
     같은 exe 를 인자만 달리해 사이트별로 쓰는 일이 흔해서 '이미 떠 있나'를 exe 로 보지 않는다.
 
     매니페스트가 관리자를 요구해도(requireAdministrator) RunAsInvoker 로 일반 권한으로 띄운다.
-    권한을 올리는 게 아니라 내리는 것이라 UAC 를 건너뛰는 게 아니다. 대신 그 앱의 관리자 전용 기능
-    (Program Files 에 자동 업데이트 쓰기 등)은 실패한다 - pitfalls 12.
+    권한을 올리는 게 아니라 내리는 것이라 UAC 를 건너뛰는 게 아니다. 대신 그 앱이 Program Files 에 쓰는 일
+    (자동 업데이트, 실행 중 캐시·설정 저장)은 실패한다. 실행 중에 쓰는 앱이면 깨진다 - pitfalls 12.
     """
     lnk = find_shortcut(name)
     before = {h for h, _ in _top_windows()}
