@@ -8,6 +8,7 @@ InitUia 가 빠지면(pitfalls 10) ui 첫 assert 에서 깨진다.
 import os
 import subprocess
 import tempfile
+import threading
 import time
 
 from PIL import Image, ImageDraw
@@ -38,7 +39,7 @@ except RuntimeError:
 
 FORM = r"""
 Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object Windows.Forms.Form; $f.Text = 'rc selftest'
+$f = New-Object Windows.Forms.Form; $f.Text = 'rc selftest'; $f.TopMost = $true   # 다른 앱 창이 버튼을 덮으면 시험이 흔들린다
 $t = New-Object Windows.Forms.TextBox; $t.Name = 'txtLot'
 $b = New-Object Windows.Forms.Button; $b.Name = 'btnSearch'; $b.Text = 'Search'; $b.Top = 40
 $l = New-Object Windows.Forms.Label; $l.Name = 'lblResult'; $l.Text = 'ready'; $l.Top = 80
@@ -80,10 +81,17 @@ try:
     me = rc.find_window("rc selftest")
     assert rc.foreground()[0] != me
     assert rc.integrity(rc._pid(me)) == rc.integrity(os.getpid()) in (0x2000, 0x3000), "권한 읽기가 틀렸다"   # 일반·관리자 둘 다
+    gif = os.path.join(tempfile.gettempdir(), "rc_selftest.gif")
+    rec = threading.Thread(target=lambda: rc.record(gif, me, max_sec=8))
+    rec.start(); time.sleep(1)
     rc.bg_click("rc selftest", *center(ctl["txtLot"]))
     rc.bg_type("rc selftest", "한글2")
     rc.bg_click("rc selftest", *center(ctl["btnSearch"]))   # 버튼 자리는 안 덮였다 - 덮이면 WinForms 가 Click 을 안 낸다(pitfalls 11)
     assert rc.ui("get", "rc selftest", "lblResult") == (True, "searched: LOT-1한글2")
+    time.sleep(1); open(rc.REC_STOP, "w").close(); rec.join(10)
+    with Image.open(gif) as g:
+        assert g.n_frames >= 2, "녹화에 바뀐 장면이 안 담겼다"   # 덮인 창인데도 입력·버튼 결과가 찍혀야 한다
+    os.remove(gif)
     img = rc.grab_window(me)
     assert img.getpixel((img.width * 3 // 4, img.height // 2))[:3] != (255, 0, 0), "덮개가 찍혔다"
     assert rc.foreground()[0] != me, "포커스를 뺏었다"

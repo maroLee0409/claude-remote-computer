@@ -37,6 +37,8 @@ CLI
   python rc.py click X Y --bg "MES" --img out.png   뒤에서: 마우스 안 움직이고 그 창에 클릭 메시지만
                                                dblclick / rclick 도 된다. 최소화된 창은 안 된다
   python rc.py type "글자" --bg "MES"           뒤에서: 그 창의 포커스 칸에 입력.  key enter --bg 도 (키 하나만)
+  python rc.py record out.gif [최대초] --bg "MES"  그 창만 뒤에서 녹화 (백그라운드로 띄워 두고 조작)
+  python rc.py record stop                      녹화를 멈추고 GIF 저장
   python rc.py launch "바로가기 이름" [초]       시작 메뉴·바탕화면 바로가기를 일반 권한으로 실행, 새로 뜬 창 제목을 찍는다
                                                이미 떠 있는지는 안 본다 - 먼저 windows 로 확인할 것
 
@@ -821,6 +823,43 @@ def wait_stable(snap, timeout, quiet=1.0):
     return False
 
 
+# ─────────────────────────────────────────────── 녹화 - 창 하나를 뒤에서
+REC_STOP = os.path.join(tempfile.gettempdir(), "rc_record.stop")
+
+
+def record(path, h, max_sec=1800, fps=2, max_edge=1280):
+    """창 h 를 PrintWindow 로 계속 찍어 GIF 로 저장. 가려져 있어도 그 창만 찍힌다. (프레임 수, 초)
+
+    REC_STOP 파일이 생기거나 max_sec 가 지나거나 창이 닫히면 끝낸다. 바뀐 프레임만 담고
+    안 바뀐 동안은 앞 프레임을 길게 보여 준다 - 그래서 10분짜리도 파일이 작다.
+    """
+    # ponytail: 프레임을 메모리에 모았다가 한 번에 쓴다. 쉴 새 없이 바뀌는 화면을 오래 찍으면 메모리가 커진다 - 그땐 ffmpeg 로.
+    if os.path.exists(REC_STOP):
+        os.remove(REC_STOP)
+    frames, durs, last = [], [], None
+    start = t_last = time.time()
+    while time.time() - start < max_sec and not os.path.exists(REC_STOP):
+        try:
+            img = grab_window(h)
+        except OSError:   # 창이 닫혔다 - 거기까지 저장
+            break
+        s = min(1, max_edge / max(img.size))
+        if s < 1:
+            img = img.resize((int(img.width * s), int(img.height * s)))
+        now = time.time()
+        if last is None or changed(last, img):
+            if frames:
+                durs.append(int((now - t_last) * 1000))
+            frames.append(img.convert("P", palette=Image.ADAPTIVE))
+            last, t_last = img, now
+        time.sleep(max(0, 1 / fps - (time.time() - now)))
+    if not frames:
+        raise RuntimeError("한 장도 못 찍었다 - 창이 최소화됐거나 닫혔다")
+    durs.append(max(500, int((time.time() - t_last) * 1000)))
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=durs, loop=0)
+    return len(frames), time.time() - start
+
+
 # ─────────────────────────────────────────────── 기다리기
 def wait_for(pred, timeout, every=0.3):
     """pred() 가 참이 될 때까지 짧게 반복 확인. 그 값을, 시간 초과면 None."""
@@ -1032,6 +1071,13 @@ def main(argv):
                 _p("시간 초과 (%g초): 화면이 안 바뀌었다" % sec); return 1
             ox, oy = (region or (0, 0))[:2]
             print("changed  %d,%d %dx%d" % (ox + bb[0], oy + bb[1], bb[2] - bb[0], bb[3] - bb[1]))
+    elif c == "record":
+        if rest and rest[0] == "stop":
+            open(REC_STOP, "w").close(); print("stop 요청 - 녹화 쪽이 저장하고 끝난다"); return 0
+        if not a.bg:
+            _p("record 는 --bg \"창\" 이 있어야 한다 (그 창만 뒤에서 찍는다)"); return 1
+        n, sec = record(rest[0] if rest else "record.gif", bg_window(a.bg), float(rest[1]) if len(rest) > 1 else 1800)
+        _p("saved %s  프레임 %d  %.0f초" % (rest[0] if rest else "record.gif", n, sec))
     elif c == "launch":
         lnk, wins = launch(rest[0], float(rest[1]) if len(rest) > 1 else 60)
         me = integrity(os.getpid())
