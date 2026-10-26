@@ -18,7 +18,61 @@ WinRM·SSH·SMB 가 다 막혀 있고 3389 만 열린 서버도 이 방법으로
 나와 있어서 Enter 가 거기로 들어갔다. 운영 중인 **다른 앱의 앱풀 편집 대화상자**가 열렸다.
 (값은 안 바뀌었지만 한 끗 차이였다.)
 
-## 지켜야 할 순서
+## (사용 안 함) 세션 안 도우미 (rc-agent) — RDP 에서는 쓰지 말고 아래 "도우미 없이" 방식을 따른다
+
+밖에서 못 보면 **안에서 보게 한다.** 세션 안 PowerShell 에 `rc-agent.ps1` 을 띄워 두면
+클립보드(RDP 가 양방향 동기화)를 통로로 명령을 받아 세션 안에서 실행하고 결과를 클립보드로 돌려준다.
+
+- 키보드·마우스를 안 쓴다 → 아래 "IIS 앱풀 대화상자에 엔터" 같은 사고가 구조적으로 안 난다.
+- 세션 안 창 목록·맨 앞 창이 텍스트로 보인다. 컨트롤도 이름으로 누른다(IIS 관리자·MMC·설치 마법사).
+- PowerShell 은 `run` 한 번에 결과까지 온다 — 붙여넣기→캡처→엔터→Transcript→클립보드가 다 빠진다.
+- 길이 제한(콘솔 한 줄 8000자)·조각 이어붙이기도 없다. 긴 스크립트는 `runfile x.ps1`.
+
+### 띄우기 (서버마다 처음 한 번, 1분)
+
+세션 안에 PowerShell 창이 하나 떠 있어야 한다(없으면 아래 "관리자 PowerShell 띄우기").
+
+```bash
+python "$RC" remote boot                          # 클립보드 = 시작 한 줄
+python "$RC" key ctrl v --focus "203.0.113"       # 세션 안 PowerShell 에 붙여넣기
+python "$RC" shot b.png --window "203.0.113"      # ← 한 줄이 PowerShell 프롬프트에 들어갔는지 눈으로 확인
+python "$RC" remote push                          # 클립보드 = rc-agent.ps1 본문 (엔터 치기 전에!)
+python "$RC" key enter --focus "203.0.113"        # 엔터 순간 클립보드를 %TEMP%/rc-agent.ps1 로 저장하고 실행
+python "$RC" remote hello                         # READY 를 받아 토큰 저장 → "연결됨: 서버명"
+```
+
+시작 한 줄은 평문이다(base64·압축 없음) — AMSI 에 걸리는 패턴이 아니다.
+두 번째부터는 파일이 이미 있으니 세션 안 PowerShell 에서
+`powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP/rc-agent.ps1` 만 하면 된다.
+
+### 쓰기
+
+```bash
+python "$RC" remote ping                          # 살아 있나
+python "$RC" remote windows                       # 세션 안 창 목록, * = 맨 앞
+python "$RC" remote fg                            # 세션 안 맨 앞 창
+python "$RC" remote focus "IIS"                   # 세션 안에서 창 앞으로
+python "$RC" remote run "Get-Service W3SVC; hostname"
+python "$RC" remote runfile deploy.ps1 --timeout 600
+python "$RC" remote controls "IIS" "풀"            # 세션 안 컨트롤 목록 (필터)
+python "$RC" remote invoke "IIS" "응용 프로그램 풀"
+python "$RC" remote wait "확인" 10                 # 세션 안 대화상자가 뜰 때까지
+python "$RC" remote stop                          # 도우미 끝내기
+```
+
+`run` 은 Write-Host·오류까지 전부 담아 돌려준다. 실패(예외)면 종료코드 1.
+
+### 안전장치와 주의
+
+- **토큰**: 도우미는 띄울 때마다 새 토큰을 만들고 그 토큰이 붙은 명령만 실행한다.
+  사용자가 복사한 다른 글이나, 클립보드에 남은 예전 명령은 무시된다.
+- 도우미 창에 받은 명령이 한 줄씩 찍힌다 — 사용자가 세션 화면에서 무엇이 실행되는지 볼 수 있다.
+- 도는 동안 **클립보드를 덮어쓴다.** 작업이 끝나면 `remote stop`.
+- 응답이 안 오면(시간 초과): 도우미 창이 죽었거나, RDP 창이 닫혔거나, 클립보드 리디렉션이 꺼진 서버다.
+  세션 화면을 캡처해서 도우미 창의 오류를 본다. 안 되는 서버면 아래 예전 방식으로.
+- 운영 서버 원칙(dry-run, 백업, 되돌리기 준비, 되돌릴 수 없는 건 먼저 묻기)은 그대로다.
+
+## 도우미 없이 — 지켜야 할 순서
 
 ```
 ① 캡처해서 세션 안 상태를 눈으로 확인

@@ -7,9 +7,31 @@ RDP 가 아니라 **이 PC 에서 돌아가는 것**을 다룰 때. 실제로는
 # 1부 — 사내 프로그램 / 레거시 앱 조작
 
 MES·ERP 같은 업무 프로그램, JDeveloper·Java Swing·WinForms·Delphi·VB6 로 만든 것들.
-공통점은 **자동화 인터페이스가 없다**는 것이다. API 도 CLI 도 없고, 접근성 트리도 부실하다.
+API 도 CLI 도 없다. 그래도 **WinForms·Win32 앱은 접근성 트리(UI Automation)로 이름이 잡힌다.**
 
-그래서 사람이 하는 것과 똑같이 한다 — 보고, 누른다.
+## 먼저 이름으로 해본다
+
+```bash
+python "$RC" ui controls "MES" btn              # 버튼만
+python "$RC" ui set "MES" txtLotNo "LOT-001"
+python "$RC" ui invoke "MES" btnSearch
+python "$RC" ui get "MES" lblCount
+```
+
+WinForms 는 AutomationId = 소스의 컨트롤 이름이다. 화면 소스를 고쳤다면
+그 Designer 의 이름(`btnSearch`, `txtLotNo`)을 그대로 쓰면 된다. 캡처할 필요가 없다.
+
+`controls` 에 아무것도 안 나오거나 전부 이름 없는 Pane 이면(Java Swing, 직접 그린 컨트롤)
+아래처럼 보고 누르는 방식으로 간다. 툴바 버튼처럼 창이 없는 항목도 `controls` 에 안 나오면 마찬가지다.
+
+## 고친 화면을 자동으로 눌러 확인할 때
+
+- **조회까지만 자동으로 한다.** 화면 열기 → 조건 입력 → 조회 → 결과·오류창 확인.
+  저장·삭제·확정은 연결된 DB 데이터를 바꾸므로 자동 확인에서 뺀다(하려면 개발자에게 먼저 묻는다).
+- 오류창은 `ui wait "오류" 3` 이나 `windows` 로 제목을 확인하고, 본문은 `ui controls "오류창제목"` 으로 읽는다.
+- PC 화면이 잠겨 있으면 캡처·클릭이 안 된다.
+
+## 이름으로 안 되면 — 보고 누른다
 
 ## 기본 순서
 
@@ -19,7 +41,8 @@ RC="$HOME/.claude/skills/computer-use/scripts/rc.py"
 python "$RC" windows                              # 창 제목으로 대상 찾기
 python "$RC" shot app.png --window "프로그램명"    # 그 창만 캡처
 # Read 툴로 app.png 를 열어 눈으로 본다
-python "$RC" click X Y --focus "프로그램명"
+python "$RC" click X Y --img app.png --focus "프로그램명"   # app.png 에서 읽은 좌표 그대로
+python "$RC" waitstable --window "프로그램명" 10             # 다 그려질 때까지
 python "$RC" shot after.png --window "프로그램명"  # 눌린 결과 확인
 ```
 
@@ -32,11 +55,13 @@ python "$RC" shot after.png --window "프로그램명"  # 눌린 결과 확인
 클릭이 안 먹으면 **전체 화면을 캡처**해서 가리는 창이 있는지 본다.
 
 **Java/Swing 은 렌더가 느리다.** 클릭하고 바로 캡처하면 이전 화면이 찍힌다.
-`0.5~1초` 두고 캡처하거나, 화면이 바뀔 때까지 반복 확인한다.
+`waitstable --window "창"` 으로 다 그려질 때까지 기다리고 캡처한다.
+결과 칸만 바뀌는 화면이면 `waitchange X Y W H 10` 이 바뀐 자리 좌표까지 찍어 준다.
+깜빡이는 입력 커서(폭 3px 이하)는 변화로 치지 않는다. 시계·애니메이션이 있는 곳은 영역에서 빼라.
 
 **그리드·표는 좌표로 세지 말고 확대해서 읽는다.**
 ```bash
-python "$RC" shot grid.png X Y W H --scale 3
+python "$RC" shot grid.png X Y W H --img app.png --scale 3   # app.png 에서 읽은 영역을 확대
 ```
 행 높이를 계산해서 "5번째 행" 을 클릭하려 들면 스크롤 위치 때문에 어긋난다.
 캡처해서 **눈으로 그 행을 찾아** 좌표를 읽는 게 정확하다.

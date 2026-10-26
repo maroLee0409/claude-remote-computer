@@ -73,19 +73,31 @@ RC="$HOME/.claude/skills/computer-use/scripts/rc.py"
 python "$RC" windows                              # every visible window + coordinates
 python "$RC" windowrect "PowerShell"              # (x, y, w, h)
 python "$RC" shot out.png --window "PowerShell"   # capture just that window
-python "$RC" shot out.png X Y W H --scale 3       # zoom in on small text
+python "$RC" shot zoom.png X Y W H --img out.png --scale 3   # zoom into a spot you saw in out.png
 
-python "$RC" click X Y --focus "Notepad"          # click, guarded
+python "$RC" click X Y --img out.png --focus "Notepad"       # click, guarded
 python "$RC" key ctrl v --focus "Notepad"
 python "$RC" drag X1 Y1 X2 Y2
 python "$RC" type "한글도 이모지도 IME 없이"
+
+python "$RC" ui controls "MyApp"                  # buttons/fields by name (UI Automation)
+python "$RC" ui invoke "MyApp" btnSearch          # press by name - no coordinates
+python "$RC" waitstable --window "MyApp" 10       # wait until it stops redrawing
+python "$RC" waitchange X Y W H 10                # wait until that area changes
+
+python "$RC" shot out.png --bg "MyApp"            # in the background: captured even when covered
+python "$RC" click X Y --bg "MyApp" --img out.png # posts the click - your mouse and focus stay yours
+python "$RC" type "LOT-001" --bg "MyApp"          # into that window's focused field
+python "$RC" launch "MyApp"                       # start a shortcut at normal privilege (even if it asks for admin)
 
 python "$RC" clipfile script.txt                  # push text via clipboard
 python "$RC" getclip result.txt                   # pull results back
 ```
 
-Every coordinate is **screenshot pixels** — read them straight off the image you just looked at.
-DPI conversion happens inside.
+Read coordinates straight off the image you just looked at and pass `--img` with it.
+`shot` stores the crop origin and scale inside the PNG, so cropped or shrunk captures need no math.
+Captures are capped at 1568px on the long edge — Claude silently downsizes bigger images,
+which would throw coordinates off. DPI conversion happens inside.
 
 ---
 

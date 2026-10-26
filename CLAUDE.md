@@ -7,7 +7,8 @@ Claude Code 가 Windows 데스크톱을 직접 조작하게 해주는 스킬. �
 **① 원본은 여기다. `~/.claude/skills/` 는 사본이다.**
 
 수정은 **반드시 이 저장소의 `skills/` 안에서** 한다.
-`~/.claude/skills/computer-use/` 를 직접 고치면 다음 동기화 때 덮여서 사라진다.
+`~/.claude/skills/computer-use/` 를 직접 고치면 `install.ps1` 이 "사본이 더 새롭다"며 그 파일을 건너뛴다.
+경고가 보이면 사본의 변경을 저장소로 옮긴 뒤 다시 돌린다(버려도 되면 `-Force`).
 
 **② 고쳤으면 이 PC 의 다른 Claude 들에게도 반영한다.**
 
@@ -15,7 +16,7 @@ Claude Code 가 Windows 데스크톱을 직접 조작하게 해주는 스킬. �
 .\scripts\install.ps1
 ```
 
-`skills/` 를 `~/.claude/skills/` 로 복사한다. 해시로 비교해서 바뀐 것만 옮긴다.
+`skills/`·`agents/` 를 `~/.claude/` 아래로 복사한다. 해시로 비교해서 바뀐 것만 옮긴다.
 **이 저장소에서 작업을 마치면 `.claude/settings.json` 의 Stop 훅이 자동으로 실행한다.**
 훅이 안 도는 상황(다른 도구로 편집 등)이면 손으로 한 번 돌려라.
 
@@ -57,11 +58,18 @@ skills/
   computer-use/
     SKILL.md           트리거 문구 · 핵심 순환 · 안전 규칙
     scripts/rc.py      툴킷 (Pillow 만 의존)
+    scripts/rc-agent.ps1  이름으로 누르기(UI Automation)·RDP 도우미
+    scripts/test_rc.py    자가 점검
     references/
+      local-apps.md    로컬 앱 조작 · PC 진단
       rdp.md           RDP 원격 서버 플레이북
       pitfalls.md      실전 함정 모음
+agents/
+  computer-use.md      화면 조작 전담 하위 에이전트 (sonnet)
 scripts/
-  install.ps1          skills/ -> ~/.claude/skills/ 동기화
+  install.ps1          skills/ agents/ -> ~/.claude/ 동기화 (사본이 더 새로우면 건너뜀)
+docs/
+  design-*.md          왜 이렇게 만들었나 - 기능을 크게 바꾸기 전에 읽는다 (사본으로 안 나간다)
 .claude/settings.json  Stop 훅 (자동 동기화)
 ```
 
@@ -75,12 +83,17 @@ scripts/
 
 **안전장치를 약화시키지 마라.** `--focus` 는 실패 시 **입력하지 않고 종료**해야 한다.
 "일단 시도해보고 안 되면 넘어가기"로 바꾸면 키가 엉뚱한 앱으로 샌다. 실제로 겪은 사고다.
+`--bg`(뒤에서)도 같다. 실패하면 멈춘다 — 앞으로 가져와 누르는 걸로 넘어가지 마라. `docs/design-background-control.md`.
+
+**권한은 올리지 않는다.** 관리자 앱을 다뤄야 하면 앱을 일반 권한으로 내려 띄운다(`launch`, RunAsInvoker).
+Claude 를 관리자로 띄우게 하거나 UAC 를 건드리는 쪽으로 풀지 마라.
 
 **한글 출력은 `_p()` 로.** cp949 콘솔에서 이모지 하나에 스크립트가 통째로 죽는다.
 
 ## 테스트
 
-자동화된 테스트는 없다(GUI 라 어렵다). 대신 손으로 확인한다:
+`python skills/computer-use/scripts/test_rc.py` — 캡처 좌표 환산·변화 감지를 먼저 보고,
+시험 창을 띄워 `ui`·`--bg`(덮개 창으로 덮은 채)·`remote` 를 확인한다(클립보드를 덮어쓴다). 그 밖에는 손으로 확인한다:
 
 ```bash
 RC="skills/computer-use/scripts/rc.py"
@@ -88,7 +101,9 @@ python "$RC" monitors                                   # 혼합 DPI 면 경고�
 python "$RC" windows | head                             # 이모지 창 제목에서 안 죽어야 함
 python "$RC" windowrect "Chrome"
 python "$RC" clip "test" && python "$RC" getclip        # 왕복
+python "$RC" key enter --bg "없는창12345"                # 예외로 막혀야 정상
 python "$RC" key enter --focus "없는창12345"             # 예외로 막혀야 정상
 ```
 
-마지막 항목이 제일 중요하다. 여기서 입력이 나가면 안전장치가 깨진 것이다.
+마지막 두 항목이 제일 중요하다. 여기서 입력이 나가면 안전장치가 깨진 것이다.
+관리자 권한 앱이 떠 있으면 `shot out.png --bg "그 창"` 이 "관리자 권한으로 떠 있다"로 멈추는지도 본다.

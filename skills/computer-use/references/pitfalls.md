@@ -25,7 +25,13 @@ python "$RC" key enter --focus "PowerShell"
 
 ---
 
-## 2. 혼합 DPI — 좌표가 어긋난다
+## 2. 혼합 DPI — 좌표가 어긋난다 (지금은 rc.py 가 해결)
+
+**지금**: `rc.py` 는 모니터별 DPI 인식(v2)으로 돌고 가상 화면 원점을 환산에 넣는다.
+배율이 달라도, 주 모니터 왼쪽에 모니터가 있어도(원점 -2560 같은 음수) 창 좌표·캡처·클릭이 맞는다.
+원점을 빼먹었던 예전 버전은 왼쪽 모니터가 있는 PC 에서 `shot --window` 가 엉뚱한 곳을 잘랐다(실제로 겪음).
+
+아래는 v2 를 못 쓰는 구형 Windows(10 1703 이전)에서만 해당한다.
 
 **증상**: 클릭이 엉뚱한 곳에 들어간다. 특히 배율이 다른 모니터에서.
 
@@ -137,8 +143,9 @@ setTimeout(() => requestAnimationFrame(shot), 2000);
 ## 9. 오래 걸리는 작업 기다리기
 
 블로킹 `sleep` 을 길게 걸지 말고, 조건이 나타날 때까지 짧게 반복 확인한다.
+이제 `waitwin` / `waitgone` / `waitclip` 이 그 반복을 해준다(RDP 도우미는 `remote` 가 알아서 기다린다).
 클립보드로 결과를 받는다면 "내가 보낸 명령 텍스트가 아직 그대로인가"로
-아직 실행 중인지 판별할 수 있다.
+아직 실행 중인지 판별할 수 있다. 직접 짤 때는 이렇게:
 
 ```python
 for _ in range(12):
@@ -150,7 +157,66 @@ for _ in range(12):
 
 ---
 
-## 10. 되돌릴 수 없는 조작
+## 10. PowerShell 에서 UI Automation 을 쓰면 컨트롤이 전부 이름 없는 Pane
+
+**증상**: WinForms·Win32 앱의 버튼·입력칸이 전부 `Pane`, 패턴 없음, AutomationId 는 숫자(창 핸들).
+같은 코드를 컴파일한 exe 로 돌리면 `Button | btnSearch | InvokePattern` 으로 정상이다.
+
+**원인**: UIA 의 `ProxyManager.LoadDefaultProxies` 가 호출자 스택을 거슬러 올라가며 호출한 어셈블리를 찾는데,
+powershell.exe 에서는 그 자리가 PowerShell 동적 메서드(ReflectedType=null)라 NullReferenceException 이 나고
+Win32/WinForms 프록시가 안 올라온다. 예외는 삼켜져서 겉으로는 안 보인다.
+
+**해법**: Add-Type 으로 컴파일한 메서드에서 UIA 를 **먼저 한 번** 부른다. `rc-agent.ps1` 의 `InitUia()` 가 그것이다.
+직접 PowerShell 로 UIA 코드를 짤 때도 똑같이 해야 한다.
+
+---
+
+## 11. 뒤에서(`--bg`) 눌렀는데 버튼만 안 눌린다 — 그 자리가 다른 창에 덮여 있다
+
+**증상**: `click --bg` 로 입력칸을 누르고 `type --bg` 로 넣는 건 되는데, 버튼을 누르면 아무 일도 없다.
+오류도 안 난다. 같은 버튼이 창이 안 덮여 있을 때는 눌린다(포그라운드가 아니어도).
+
+**원인**: WinForms 는 마우스를 뗄 때 `WindowFromPoint(그 자리) == 내 핸들` 일 때만 Click 을 낸다.
+화면에서 그 자리를 다른 창이 덮고 있으면 메시지는 받아도 Click 을 버린다. MES 의 직접 그린 버튼도 같다.
+글자 입력(WM_CHAR)·네이티브 입력칸 클릭은 이 검사가 없어서 덮여 있어도 된다.
+
+**해법**: 대상 창을 **덮이지 않는 곳**에 둔다 — 앞으로 올 필요는 없고, 누를 자리만 보이면 된다.
+예: 사람은 1번 모니터에서 일하고 MES 는 2번 모니터에 둔다. 표준 `Button` 이면 `ui invoke` 가 덮여 있어도 된다(PerformClick).
+누른 뒤에는 `shot --bg` 로 정말 바뀌었는지 확인한다 - 안 눌려도 오류가 없기 때문이다.
+
+---
+
+## 12. 관리자 권한으로 뜬 앱은 아무것도 안 먹는다 (UIPI)
+
+**증상**: `shot --bg` 가 `PrintWindow 실패: 5`, `click --bg` 가 `PostMessage 실패(5)`.
+`click`·`key`(SendInput)는 **오류 없이 조용히 무시된다** — 눌렀다고 찍히는데 화면이 안 바뀐다.
+`ui controls` 로 이름 읽기는 되니 더 헷갈린다.
+
+**원인**: 대상 앱이 관리자 권한(High)이고 rc.py 는 일반 권한(Medium)이다. Windows 는 낮은 권한에서
+높은 권한 창으로 가는 입력·메시지·그리기를 막는다. 관리자로 뜨는 길은 셋이다:
+매니페스트 `requireAdministrator`(띄울 때마다 UAC 창), 바로가기·호환성 탭의 "관리자로 실행", 사용자가 우클릭 → 관리자로 실행.
+업무 프로그램은 `Program Files` 에 자동 업데이트를 쓰려고 매니페스트로 관리자를 요구하는 일이 많다.
+
+**확인**: rc.py 가 보내기 전에 권한을 비교해서 `관리자 권한으로 떠 있어 Windows 가 입력·캡처를 막는다` 로 멈춘다
+(`--bg` 전부, `--focus` 를 붙인 입력 - 창을 앞으로 가져오기 전에). 손으로 볼 때는 `Get-Process 이름 | Select Path` 의 Path 가 비어 나온다.
+
+**해법**: `rc.py launch "바로가기 이름"` — `__COMPAT_LAYER=RunAsInvoker` 로 매니페스트의 관리자 요구를 무시하고 일반 권한으로 띄운다.
+권한을 내리는 것이라 UAC 우회가 아니다. 대가: 그 앱의 관리자 전용 기능은 실패한다 — 대표적으로 `Program Files` 에 쓰는 자동 업데이트.
+업데이트가 뜨면 사용자가 원래 바로가기로 한 번 띄워 받고 닫은 뒤 다시 `launch`.
+이미 관리자로 떠 있는 것은 일반 권한에서 닫을 수도 없다(WM_CLOSE 도 막힌다) — 사용자가 닫는다.
+Claude Code 를 관리자로 띄우는 것도 되지만 하지 마라: 에이전트가 돌리는 모든 명령이 관리자 권한이 된다.
+
+**실제로 겪은 것**:
+- 매니페스트를 정규식 첫 번째 `level="..."` 로 읽어 `asInvoker` 라고 잘못 판단했다. Visual Studio 매니페스트 템플릿은
+  **주석 안에** `asInvoker`·`requireAdministrator`·`highestAvailable` 예시가 먼저 나온다. 주석 밖의 것을 봐야 한다.
+  `CreateProcess` 가 `WinError 740`(권한 상승 필요)을 내면 그게 답이다.
+- 같은 이름의 실행 파일이 설치본마다 달랐다(데모 설치본은 `asInvoker`, 사이트 설치본은 `requireAdministrator`).
+  실제로 뜬 프로세스의 경로(`QueryFullProcessImageName`)로 확인할 것.
+- 사이트 바로가기가 MSI 광고 바로가기라 대상이 `C:\Windows\Installer\{GUID}\...exe`(아이콘)로 보였다. 실행 파일 이름으로 창을 찾으면 못 찾는다.
+
+---
+
+## 13. 되돌릴 수 없는 조작
 
 파일 삭제, 설정 변경, 결제, 메일 전송, 서비스 재시작.
 **먼저 물어라.** 특히 운영 서버라면.
